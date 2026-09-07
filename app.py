@@ -3,6 +3,9 @@ import pandas as pd
 import streamlit as st
 import ta
 import yfinance as yf
+import streamlit as st
+import requests  # <-- Agregar esta línea si no está
+
 
 st.set_page_config(
     page_title="Screener Pre-Earnings, Swing & Cripto",
@@ -12,6 +15,27 @@ st.set_page_config(
 
 st.title("Screener Pre-Earnings, Swing Trading & Cripto")
 st.caption("AUDITORÍA DE RIESGO, VOLUMEN & TENDENCIA")
+
+# --- COTIZACIONES DÓLAR ---
+@st.cache_data(ttl=300)
+def obtener_cotizaciones():
+    try:
+        url = "https://dolarapi.com/v1/dolares"
+        res = requests.get(url, timeout=5)
+        datos = res.json()
+        return {item["casa"]: item["venta"] for item in datos}
+    except Exception:
+        return None
+
+cotizaciones = obtener_cotizaciones()
+
+if cotizaciones:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Dólar Oficial", f"${cotizaciones.get('oficial', 0):,.2f}")
+    c2.metric("Dólar MEP", f"${cotizaciones.get('bolsa', 0):,.2f}")
+    c3.metric("Dólar CCL", f"${cotizaciones.get('contadoconliqui', 0):,.2f}")
+    st.divider()
+# ---------------------------
 
 tickers_input = st.text_input(
     "Tickers:", "MU, NU, IBM, YPF, MSFT, DELL, GGAL, BTC-USD"
