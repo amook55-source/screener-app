@@ -66,20 +66,36 @@ if st.button("EVALUAR MERCADO", type="primary"):
                 (volumen_hoy / volumen_prom_20) if volumen_prom_20 > 0 else 1.0
             )
 
+            # Promedios móviles para plazos
+            sma_50 = hist["Close"].rolling(window=50).mean().iloc[-1]
             sma_200 = hist["Close"].rolling(window=200).mean().iloc[-1]
-            tendencia = (
-                "ALCISTA" if precio_actual > sma_200 else "BAJISTA / REBOTE"
+
+            # Diagnóstico de tendencias por horizontes
+            tendencia_mediano = (
+                "FAVORABLE (ALCISTA)"
+                if precio_actual > sma_50
+                else "DESFAVORABLE (BAJISTA)"
+            )
+            tendencia_largo = (
+                "FAVORABLE (ALCISTA)"
+                if precio_actual > sma_200
+                else "DESFAVORABLE (BAJISTA)"
             )
 
             vol_diaria = hist["Close"].pct_change().dropna().std()
             stop_loss = precio_actual * (1 - (1.5 * vol_diaria))
+            distancia_stop_pct = (
+                (stop_loss - precio_actual) / precio_actual
+            ) * 100
             riesgo_por_accion = max(precio_actual - stop_loss, 0.01)
 
-            acciones_posicion = math.floor(100 / riesgo_por_accion)
-            monto_inversion = acciones_posicion * precio_actual
+            # Soportes y Resistencias dinámicos (mínimo y máximo de 20 días)
+            soporte = hist["Low"].tail(20).min()
+            resistencia = hist["High"].tail(20).max()
 
             target_val = None
-            target_str = "N/A"
+            take_profit = None
+            ratio_rr_val = None
             ratio_rr_str = "N/A"
 
             if not is_crypto:
@@ -88,12 +104,19 @@ if st.button("EVALUAR MERCADO", type="primary"):
                     if info_dict and "targetMeanPrice" in info_dict:
                         target_val = info_dict["targetMeanPrice"]
                         if target_val:
-                            target_str = f"${target_val:.2f}"
+                            take_profit = target_val
                             ganancia = target_val - precio_actual
                             if riesgo_por_accion > 0 and ganancia > 0:
-                                ratio_rr_str = f"1:{ganancia/riesgo_por_accion:.2f}"
+                                ratio_rr_val = ganancia / riesgo_por_accion
+                                ratio_rr_str = f"1:{ratio_rr_val:.2f}"
                 except Exception:
                     pass
+
+            # Si no hay Target institucional o es cripto, proyecta R/R 1:3 por defecto
+            if not take_profit or take_profit <= precio_actual:
+                ratio_rr_val = 3.0
+                take_profit = precio_actual + (riesgo_por_accion * ratio_rr_val)
+                ratio_rr_str = f"1:{ratio_rr_val:.2f} (Proyectado)"
 
             puntos_riesgo = 0
             motivos = []
@@ -104,9 +127,7 @@ if st.button("EVALUAR MERCADO", type="primary"):
 
             if target_val and precio_actual > target_val:
                 puntos_riesgo += 2
-                motivos.append(
-                    f"Por encima del Precio Objetivo ({target_str})."
-                )
+                motivos.append(f"Por encima del Target (${target_val:.2f}).")
 
             if (precio_actual / maximo_52w) > 0.96:
                 puntos_riesgo += 2
@@ -124,7 +145,7 @@ if st.button("EVALUAR MERCADO", type="primary"):
                 puntos_riesgo += 1
                 motivos.append(f"Bajo volumen ({rvol:.2f}x).")
 
-            if tendencia == "BAJISTA / REBOTE":
+            if precio_actual < sma_200:
                 puntos_riesgo += 1
                 motivos.append("Debajo de SMA 200.")
 
@@ -140,7 +161,6 @@ if st.button("EVALUAR MERCADO", type="primary"):
                 if (rsi < 65 and rvol >= 1.0)
                 else ("DESFAVORABLE" if rsi >= 68 else "NEUTRO / EN ESPERA")
             )
-            mediano = "FAVORABLE" if tendencia == "ALCISTA" else "DESFAVORABLE"
 
             tabla_datos.append(
                 {
@@ -149,7 +169,9 @@ if st.button("EVALUAR MERCADO", type="primary"):
                     "RSI": f"{rsi:.1f}",
                     "Volumen (RVOL)": f"{rvol:.2f}x",
                     "Volatilidad": f"{volatilidad*100:.1f}%",
-                    "Tendencia": tendencia,
+                    "Tendencia": "ALCISTA"
+                    if precio_actual > sma_200
+                    else "BAJISTA / REBOTE",
                     "Veredicto": veredicto,
                 }
             )
@@ -157,11 +179,14 @@ if st.button("EVALUAR MERCADO", type="primary"):
             diagnosticos[ticker_clean] = {
                 "veredicto": veredicto,
                 "corto": corto,
-                "mediano": mediano,
+                "mediano": tendencia_mediano,
+                "largo": tendencia_largo,
                 "stop": stop_loss,
+                "distancia_stop": distancia_stop_pct,
+                "take_profit": take_profit,
                 "ratio": ratio_rr_str,
-                "nominales": acciones_posicion,
-                "monto": monto_inversion,
+                "soporte": soporte,
+                "resistencia": resistencia,
                 "motivos": motivos,
             }
 
@@ -199,7 +224,7 @@ if "df" in st.session_state and not st.session_state["df"].empty:
     st.subheader("Oportunidades y Estado de Mercado")
     st.caption("Tocá cualquier fila para seleccionar el activo:")
 
-    # Tabla interactiva con selección de fila completa
+    # Tabla interactiva
     event = st.dataframe(
         df_styled,
         use_container_width=True,
@@ -221,11 +246,15 @@ if "df" in st.session_state and not st.session_state["df"].empty:
         st.write(f"**Veredicto:** {item['veredicto']}")
         st.write(f"• **Corto plazo:** {item['corto']}")
         st.write(f"• **Mediano plazo:** {item['mediano']}")
+        st.write(f"• **Largo plazo:** {item['largo']}")
+        st.write("---")
         st.write(
-            f"• **Stop-Loss Técnico:** ${item['stop']:,.2f} | **R/R:** {item['ratio']}"
+            f"• **Stop-Loss Técnico:** ${item['stop']:,.2f} ({item['distancia_stop']:.2f}%)"
         )
+        st.write(f"• **Take-Profit Objetivo:** ${item['take_profit']:,.2f}")
+        st.write(f"• **Relación Riesgo/Beneficio:** {item['ratio']}")
         st.write(
-            f"• **Posición ($100 riesgo):** {item['nominales']} nominales (~${item['monto']:,.2f})"
+            f"• **Niveles Clave:** Soporte ${item['soporte']:,.2f} | Resistencia ${item['resistencia']:,.2f}"
         )
 
         if item["motivos"]:
@@ -234,3 +263,4 @@ if "df" in st.session_state and not st.session_state["df"].empty:
             st.success("✅ Sin factores de riesgo graves detectados.")
     else:
         st.info("💡 Seleccioná una fila arriba para ver el desglose técnico.")
+            
