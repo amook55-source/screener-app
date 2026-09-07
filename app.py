@@ -10,17 +10,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Estilo visual para imitar interfaz oscura compacta
-st.markdown(
-    """
-    <style>
-    .stApp { background-color: #0e1117; }
-    div[data-testid="stTable"] table { font-size: 14px; }
-    </style>
-""",
-    unsafe_allow_html=True,
-)
-
 st.title("Screener Pre-Earnings, Swing Trading & Cripto")
 st.caption("AUDITORÍA DE RIESGO, VOLUMEN & TENDENCIA")
 
@@ -43,7 +32,7 @@ if st.button("EVALUAR MERCADO", type="primary"):
         pass
 
     tabla_datos = []
-    diagnosticos = []
+    diagnosticos = {}
 
     for t in tickers:
         try:
@@ -153,7 +142,6 @@ if st.button("EVALUAR MERCADO", type="primary"):
             )
             mediano = "FAVORABLE" if tendencia == "ALCISTA" else "DESFAVORABLE"
 
-            # Cargar fila de la tabla principal
             tabla_datos.append(
                 {
                     "Ticker": ticker_clean,
@@ -162,61 +150,87 @@ if st.button("EVALUAR MERCADO", type="primary"):
                     "Volumen (RVOL)": f"{rvol:.2f}x",
                     "Volatilidad": f"{volatilidad*100:.1f}%",
                     "Tendencia": tendencia,
-                    "Precio Objetivo": target_str,
-                    "Veredicto General": veredicto,
+                    "Veredicto": veredicto,
                 }
             )
 
-            # Cargar informe detallado de riesgo
-            diagnosticos.append(
-                {
-                    "ticker": ticker_clean,
-                    "veredicto": veredicto,
-                    "corto": corto,
-                    "mediano": mediano,
-                    "stop": stop_loss,
-                    "ratio": ratio_rr_str,
-                    "nominales": acciones_posicion,
-                    "monto": monto_inversion,
-                    "motivos": motivos,
-                }
-            )
+            diagnosticos[ticker_clean] = {
+                "veredicto": veredicto,
+                "corto": corto,
+                "mediano": mediano,
+                "stop": stop_loss,
+                "ratio": ratio_rr_str,
+                "nominales": acciones_posicion,
+                "monto": monto_inversion,
+                "motivos": motivos,
+            }
 
         except Exception as e:
             st.error(f"Error procesando {t}: {e}")
 
-    # Display Tabla Principal
-    if tabla_datos:
-        df = pd.DataFrame(tabla_datos)
-        st.subheader("Oportunidades y Estado de Mercado")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+    # Guardar estado de análisis
+    st.session_state["df"] = pd.DataFrame(tabla_datos)
+    st.session_state["diagnosticos"] = diagnosticos
 
-        st.divider()
-        st.subheader(
-            "DIAGNÓSTICO INTEGRAL DE RIESGO, GESTIÓN DE CAPITAL Y HORIZONTES"
+# Mostrar resultados si existen
+if "df" in st.session_state and not st.session_state["df"].empty:
+    df = st.session_state["df"]
+    diagnosticos = st.session_state["diagnosticos"]
+
+    # Función para colorear según semáforo
+    def colorear_filas(row):
+        v = row["Veredicto"]
+        if "COMPRA SWING" in v:
+            color = (
+                "background-color: #1e4620; color: #a3e635;"  # Verde oscuro
+            )
+        elif "ESPERA" in v:
+            color = (
+                "background-color: #5c3d00; color: #fde047;"  # Amarillo/Ocre
+            )
+        else:
+            color = (
+                "background-color: #4a151b; color: #fca5a5;"  # Rojo oscuro
+            )
+        return [color] * len(row)
+
+    df_styled = df.style.apply(colorear_filas, axis=1)
+
+    st.subheader("Oportunidades y Estado de Mercado")
+    st.caption("Tocá cualquier fila para seleccionar el activo:")
+
+    # Tabla interactiva con selección de fila completa
+    event = st.dataframe(
+        df_styled,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+
+    # Detalle dinámico del ticker seleccionado
+    selected_rows = event.selection.get("rows", [])
+    st.divider()
+
+    if selected_rows:
+        idx = selected_rows[0]
+        ticker_sel = df.iloc[idx]["Ticker"]
+        item = diagnosticos[ticker_sel]
+
+        st.subheader(f"🔍 DIAGNÓSTICO DETALLADO: {ticker_sel}")
+        st.write(f"**Veredicto:** {item['veredicto']}")
+        st.write(f"• **Corto plazo:** {item['corto']}")
+        st.write(f"• **Mediano plazo:** {item['mediano']}")
+        st.write(
+            f"• **Stop-Loss Técnico:** ${item['stop']:,.2f} | **R/R:** {item['ratio']}"
+        )
+        st.write(
+            f"• **Posición ($100 riesgo):** {item['nominales']} nominales (~${item['monto']:,.2f})"
         )
 
-        for item in diagnosticos:
-            with st.expander(
-                f"DIAGNÓSTICO PARA {item['ticker']} — {item['veredicto']}"
-            ):
-                st.write(
-                    f"• **CORTO PLAZO:** {item['corto']} (Esperar volumen/gatillo)"
-                )
-                st.write(f"• **MEDIANO PLAZO:** {item['mediano']}")
-                st.write("---")
-                st.write("**GESTIÓN DE CAPITAL Y RIESGO:**")
-                st.write(f"• Stop-Loss Técnico Sugerido: **${item['stop']:,.2f}**")
-                st.write(
-                    f"• Relación Riesgo / Beneficio Estimada: **{item['ratio']}**"
-                )
-                st.write(
-                    f"• Tamaño de Posición (**{item['nominales']} nominales**): Comprar **~${item['monto']:,.2f}** limita el riesgo a **$100**."
-                )
-
-                if item["motivos"]:
-                    st.warning(
-                        "⚠️ **Alertas:** " + " | ".join(item["motivos"])
-                    )
-                else:
-                    st.success("✅ Sin factores de riesgo graves detectados.")
+        if item["motivos"]:
+            st.warning("⚠️ **Alertas:** " + " | ".join(item["motivos"]))
+        else:
+            st.success("✅ Sin factores de riesgo graves detectados.")
+    else:
+        st.info("💡 Seleccioná una fila arriba para ver el desglose técnico.")
